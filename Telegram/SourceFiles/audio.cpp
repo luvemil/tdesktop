@@ -20,7 +20,7 @@ Copyright (c) 2014 John Preston, https://desktop.telegram.org
 
 #include <AL/al.h>
 #include <AL/alc.h>
-#include <opusfile.h>
+#include "opusfile.h"
 #include <ogg/ogg.h>
 
 namespace {
