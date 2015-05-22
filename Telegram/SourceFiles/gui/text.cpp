@@ -239,31 +239,6 @@ const QChar *textSkipCommand(const QChar *from, const QChar *end, bool canLink) 
 	return (result < end && *result == TextCommand) ? (result + 1) : from;
 }
 
-QString textEmojiString(EmojiPtr emoji) {
-	if ((emoji->code & 0xFFFF0000U) == 0xFFFF0000U) { // sequence
-		return emojiGetSequence(emoji->code & 0xFFFFU);
-	}
-
-	QString result;
-	result.reserve(emoji->len + (emoji->postfix ? 1 : 0));
-	if (!(emoji->code >> 16)) {
-		result.append(QChar(emoji->code & 0xFFFF));
-	} else {
-		result.append(QChar((emoji->code >> 16) & 0xFFFF));
-		result.append(QChar(emoji->code & 0xFFFF));
-		if (emoji->code2) {
-			result.append(QChar((emoji->code2 >> 16) & 0xFFFF));
-			result.append(QChar(emoji->code2 & 0xFFFF));
-		}
-	}
-	if (emoji->color && ((emoji->color & 0xFFFF0000U) != 0xFFFF0000U)) {
-		result.append(QChar((emoji->color >> 16) & 0xFFFF));
-		result.append(QChar(emoji->color & 0xFFFF));
-	}
-	if (emoji->postfix) result.append(QChar(emoji->postfix));
-	return result;
-}
-
 class TextParser {
 public:
 	
@@ -527,6 +502,10 @@ public:
 		for (int l = len - skipped - 1; l > 0; --l) {
 			_t->_text.push_back(*++ptr);
 		}
+		if (e->postfix && _t->_text.at(_t->_text.size() - 1).unicode() != e->postfix) {
+			_t->_text.push_back(e->postfix);
+			++len;
+		}
 
 		createBlock(-len);
 		emoji = e;
@@ -757,10 +736,13 @@ void TextLink::onClick(Qt::MouseButton button) const {
 		QString url = TextLink::encoded();
 		QRegularExpressionMatch telegramMeUser = QRegularExpression(qsl("^https?://telegram\\.me/([a-zA-Z0-9\\.\\_]+)(\\?|$)"), QRegularExpression::CaseInsensitiveOption).match(url);
 		QRegularExpressionMatch telegramMeGroup = QRegularExpression(qsl("^https?://telegram\\.me/joinchat/([a-zA-Z0-9\\.\\_\\-]+)(\\?|$)"), QRegularExpression::CaseInsensitiveOption).match(url);
+		QRegularExpressionMatch telegramMeStickers = QRegularExpression(qsl("^https?://telegram\\.me/addstickers/([a-zA-Z0-9\\.\\_]+)(\\?|$)"), QRegularExpression::CaseInsensitiveOption).match(url);
 		if (telegramMeUser.hasMatch()) {
 			App::openUserByName(telegramMeUser.captured(1));
 		} else if (telegramMeGroup.hasMatch()) {
 			App::joinGroupByHash(telegramMeGroup.captured(1));
+		} else if (telegramMeStickers.hasMatch()) {
+			App::stickersBox(telegramMeStickers.captured(1));
 		} else if (QRegularExpression(qsl("^tg://[a-zA-Z0-9]+"), QRegularExpression::CaseInsensitiveOption).match(url).hasMatch()) {
 			App::openLocalUrl(url);
 		} else {
@@ -1147,12 +1129,12 @@ public:
 
 		if ((selectFromStart && _parDirection == Qt::LeftToRight) || (selectTillEnd && _parDirection == Qt::RightToLeft)) {
 			if (x > _x) {
-				_p->fillRect(QRectF(_x.toReal(), _y + _yDelta, (x - _x).toReal(), _fontHeight), _textStyle->selectBG->b);
+				_p->fillRect(QRectF(_x.toReal(), _y + _yDelta, (x - _x).toReal(), _fontHeight), _textStyle->selectBg->b);
 			}
 		}
 		if ((selectTillEnd && _parDirection == Qt::LeftToRight) || (selectFromStart && _parDirection == Qt::RightToLeft)) {
 			if (x < _x + _wLeft) {
-				_p->fillRect(QRectF((x + _w - _wLeft).toReal(), _y + _yDelta, (_x + _wLeft - x).toReal(), _fontHeight), _textStyle->selectBG->b);
+				_p->fillRect(QRectF((x + _w - _wLeft).toReal(), _y + _yDelta, (_x + _wLeft - x).toReal(), _fontHeight), _textStyle->selectBg->b);
 			}
 		}
 
@@ -1310,15 +1292,15 @@ public:
 						const QChar *chFrom = _str + currentBlock->from(), *chTo = chFrom + ((nextBlock ? nextBlock->from() : _t->_text.size()) - currentBlock->from());
 						if (_localFrom + si.position >= _selectedFrom) { // could be without space
 							if (chTo == chFrom || (chTo - 1)->unicode() != QChar::Space || _selectedTo >= (chTo - _str)) {
-								_p->fillRect(QRectF(x.toReal(), _y + _yDelta, si.width.toReal(), _fontHeight), _textStyle->selectBG->b);
+								_p->fillRect(QRectF(x.toReal(), _y + _yDelta, si.width.toReal(), _fontHeight), _textStyle->selectBg->b);
 							} else { // or with space
-								_p->fillRect(QRectF(glyphX.toReal(), _y + _yDelta, currentBlock->f_width().toReal(), _fontHeight), _textStyle->selectBG->b);
+								_p->fillRect(QRectF(glyphX.toReal(), _y + _yDelta, currentBlock->f_width().toReal(), _fontHeight), _textStyle->selectBg->b);
 							}
 						} else if (chTo > chFrom && (chTo - 1)->unicode() == QChar::Space && (chTo - 1 - _str) >= _selectedFrom) {
 							if (rtl) { // rtl space only
-								_p->fillRect(QRectF(x.toReal(), _y + _yDelta, (glyphX - x).toReal(), _fontHeight), _textStyle->selectBG->b);
+								_p->fillRect(QRectF(x.toReal(), _y + _yDelta, (glyphX - x).toReal(), _fontHeight), _textStyle->selectBg->b);
 							} else { // ltr space only
-								_p->fillRect(QRectF((x + currentBlock->f_width()).toReal(), _y + _yDelta, (si.width - currentBlock->f_width()).toReal(), _fontHeight), _textStyle->selectBG->b);
+								_p->fillRect(QRectF((x + currentBlock->f_width()).toReal(), _y + _yDelta, (si.width - currentBlock->f_width()).toReal(), _fontHeight), _textStyle->selectBg->b);
 							}
 						}
 					}
@@ -1444,7 +1426,7 @@ public:
 						}
 					}
 					if (rtl) selX = x + itemWidth - (selX - x) - selWidth;
-					_p->fillRect(QRectF(selX.toReal(), _y + _yDelta, selWidth.toReal(), _fontHeight), _textStyle->selectBG->b);
+					_p->fillRect(QRectF(selX.toReal(), _y + _yDelta, selWidth.toReal(), _fontHeight), _textStyle->selectBg->b);
 				}
 
 				_p->drawTextItem(QPointF(x.toReal(), textY), gf);
@@ -2259,6 +2241,21 @@ _startDir(other._startDir)
 	for (int32 i = 0, l = _blocks.size(); i < l; ++i) {
 		_blocks[i] = other._blocks.at(i)->clone();
 	}
+}
+
+Text &Text::operator=(const Text &other) {
+	_minResizeWidth = other._minResizeWidth;
+	_maxWidth = other._maxWidth;
+	_minHeight = other._minHeight;
+	_text = other._text;
+	_font = other._font;
+	_blocks = TextBlocks(other._blocks.size());
+	_links = other._links;
+	_startDir = other._startDir;
+	for (int32 i = 0, l = _blocks.size(); i < l; ++i) {
+		_blocks[i] = other._blocks.at(i)->clone();
+	}
+	return *this;
 }
 
 void Text::setText(style::font font, const QString &text, const TextParseOptions &options) {

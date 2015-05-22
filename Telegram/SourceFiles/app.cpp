@@ -75,6 +75,9 @@ namespace {
 
 	QPixmap *sprite = 0, *emojis = 0, *emojisLarge = 0;
 
+	QPixmap *corners[RoundCornersCount][4] = { { 0 } };
+	QImage *cornersMask[4] = { 0 };
+
 	typedef QMap<uint64, QPixmap> EmojisMap;
 	EmojisMap mainEmojisMap;
 	QMap<int32, EmojisMap> otherEmojisMap;
@@ -86,7 +89,8 @@ namespace {
 	typedef QHash<PhotoData*, LastPhotosList::iterator> LastPhotosMap;
 	LastPhotosMap lastPhotosMap;
 
-	style::color _msgServiceBG;
+	style::color _msgServiceBg;
+	style::color _msgServiceSelectBg;
 	style::color _historyScrollBarColor;
 	style::color _historyScrollBgColor;
 	style::color _historyScrollBarOverColor;
@@ -633,7 +637,7 @@ namespace App {
 			const MTPDphotoSize &d(size.c_photoSize());
 			if (d.vlocation.type() == mtpc_fileLocation) {
 				const MTPDfileLocation &l(d.vlocation.c_fileLocation());
-				return ImagePtr(d.vw.v, d.vh.v, l.vdc_id.v, l.vvolume_id.v, l.vlocal_id.v, l.vsecret.v, d.vsize.v);
+				return ImagePtr(StorageImageLocation(d.vw.v, d.vh.v, l.vdc_id.v, l.vvolume_id.v, l.vlocal_id.v, l.vsecret.v), d.vsize.v);
 			}
 		} break;
 		case mtpc_photoCachedSize: {
@@ -642,15 +646,41 @@ namespace App {
 				const MTPDfileLocation &l(d.vlocation.c_fileLocation());
 				const string &s(d.vbytes.c_string().v);
 				QByteArray bytes(s.data(), s.size());
-				return ImagePtr(d.vw.v, d.vh.v, l.vdc_id.v, l.vvolume_id.v, l.vlocal_id.v, l.vsecret.v, bytes);
+				return ImagePtr(StorageImageLocation(d.vw.v, d.vh.v, l.vdc_id.v, l.vvolume_id.v, l.vlocal_id.v, l.vsecret.v), bytes);
 			} else if (d.vlocation.type() == mtpc_fileLocationUnavailable) {
 				const string &s(d.vbytes.c_string().v);
 				QByteArray bytes(s.data(), s.size());
-				return ImagePtr(d.vw.v, d.vh.v, 0, 0, 0, 0, bytes);
+				return ImagePtr(StorageImageLocation(d.vw.v, d.vh.v, 0, 0, 0, 0), bytes);
 			}				
 		} break;
 		}
 		return ImagePtr();
+	}
+
+	StorageImageLocation imageLocation(const MTPPhotoSize &size) {
+		switch (size.type()) {
+		case mtpc_photoSize: {
+			const MTPDphotoSize &d(size.c_photoSize());
+			if (d.vlocation.type() == mtpc_fileLocation) {
+				const MTPDfileLocation &l(d.vlocation.c_fileLocation());
+				return StorageImageLocation(d.vw.v, d.vh.v, l.vdc_id.v, l.vvolume_id.v, l.vlocal_id.v, l.vsecret.v);
+			}
+		} break;
+		case mtpc_photoCachedSize: {
+			const MTPDphotoCachedSize &d(size.c_photoCachedSize());
+			if (d.vlocation.type() == mtpc_fileLocation) {
+				const MTPDfileLocation &l(d.vlocation.c_fileLocation());
+				const string &s(d.vbytes.c_string().v);
+				QByteArray bytes(s.data(), s.size());
+				return StorageImageLocation(d.vw.v, d.vh.v, l.vdc_id.v, l.vvolume_id.v, l.vlocal_id.v, l.vsecret.v);
+			} else if (d.vlocation.type() == mtpc_fileLocationUnavailable) {
+				const string &s(d.vbytes.c_string().v);
+				QByteArray bytes(s.data(), s.size());
+				return StorageImageLocation(d.vw.v, d.vh.v, 0, 0, 0, 0);
+			}
+		} break;
+		}
+		return StorageImageLocation();
 	}
 
 	void feedWereRead(const QVector<MTPint> &msgsIds) {
@@ -874,7 +904,7 @@ namespace App {
 		switch (document.type()) {
 		case mtpc_document: {
 			const MTPDdocument &d(document.c_document());
-			return App::document(d.vid.v, 0, d.vaccess_hash.v, d.vdate.v, d.vattributes.c_vector().v, qs(d.vmime_type), ImagePtr(thumb, "JPG"), d.vdc_id.v, d.vsize.v);
+			return App::documentSet(d.vid.v, 0, d.vaccess_hash.v, d.vdate.v, d.vattributes.c_vector().v, qs(d.vmime_type), ImagePtr(thumb, "JPG"), d.vdc_id.v, d.vsize.v, StorageImageLocation());
 		} break;
 		case mtpc_documentEmpty: return App::document(document.c_documentEmpty().vid.v);
 		}
@@ -887,14 +917,14 @@ namespace App {
 			return feedDocument(document.c_document(), convert);
 		} break;
 		case mtpc_documentEmpty: {
-			return App::document(document.c_documentEmpty().vid.v, convert);
+			return App::documentSet(document.c_documentEmpty().vid.v, convert, 0, 0, QVector<MTPDocumentAttribute>(), QString(), ImagePtr(), 0, 0, StorageImageLocation());
 		} break;
 		}
 		return App::document(0);
 	}
 
 	DocumentData *feedDocument(const MTPDdocument &document, DocumentData *convert) {
-		return App::document(document.vid.v, convert, document.vaccess_hash.v, document.vdate.v, document.vattributes.c_vector().v, qs(document.vmime_type), App::image(document.vthumb), document.vdc_id.v, document.vsize.v);
+		return App::documentSet(document.vid.v, convert, document.vaccess_hash.v, document.vdate.v, document.vattributes.c_vector().v, qs(document.vmime_type), App::image(document.vthumb), document.vdc_id.v, document.vsize.v, App::imageLocation(document.vthumb));
 	}
 
 	WebPageData *feedWebPage(const MTPDwebPage &webpage, WebPageData *convert) {
@@ -908,7 +938,11 @@ namespace App {
 	WebPageData *feedWebPage(const MTPWebPage &webpage) {
 		switch (webpage.type()) {
 		case mtpc_webPage: return App::feedWebPage(webpage.c_webPage());
-		case mtpc_webPageEmpty: return App::webPage(webpage.c_webPageEmpty().vid.v);
+		case mtpc_webPageEmpty: {
+			WebPageData *page = App::webPage(webpage.c_webPageEmpty().vid.v);
+			if (page->pendingTill > 0) page->pendingTill = -1; // failed
+			return page;
+		} break;
 		case mtpc_webPagePending: return App::feedWebPage(webpage.c_webPagePending());
 		}
 		return 0;
@@ -1128,7 +1162,15 @@ namespace App {
 		return result;
 	}
 
-	DocumentData *document(const DocumentId &document, DocumentData *convert, const uint64 &access, int32 date, const QVector<MTPDocumentAttribute> &attributes, const QString &mime, const ImagePtr &thumb, int32 dc, int32 size) {
+	DocumentData *document(const DocumentId &document) {
+		DocumentsData::const_iterator i = documentsData.constFind(document);
+		if (i == documentsData.cend()) {
+			i = documentsData.insert(document, new DocumentData(document));
+		}
+		return i.value();
+	}
+
+	DocumentData *documentSet(const DocumentId &document, DocumentData *convert, const uint64 &access, int32 date, const QVector<MTPDocumentAttribute> &attributes, const QString &mime, const ImagePtr &thumb, int32 dc, int32 size, const StorageImageLocation &thumbLocation) {
 		if (convert) {
 			if (convert->id != document) {
 				DocumentsData::iterator i = documentsData.find(convert->id);
@@ -1146,12 +1188,28 @@ namespace App {
 				convert->thumb = thumb;
 				convert->dc = dc;
 				convert->size = size;
-			} else if (convert->thumb->isNull() && !thumb->isNull()) {
-				convert->thumb = thumb;
+			} else {
+				if (!thumb->isNull() && (convert->thumb->isNull() || convert->thumb->width() < thumb->width() || convert->thumb->height() < thumb->height())) {
+					convert->thumb = thumb;
+				}
+				if (convert->sticker && !attributes.isEmpty() && (convert->sticker->alt.isEmpty() || convert->sticker->set.type() == mtpc_inputStickerSetEmpty)) {
+					for (QVector<MTPDocumentAttribute>::const_iterator i = attributes.cbegin(), e = attributes.cend(); i != e; ++i) {
+						if (i->type() == mtpc_documentAttributeSticker) {
+							const MTPDdocumentAttributeSticker &d(i->c_documentAttributeSticker());
+							if (d.valt.c_string().v.length() > 0) {
+								convert->sticker->alt = qs(d.valt);
+								convert->sticker->set = d.vstickerset;
+							}
+						}
+					}
+				}
+			}
+			if (convert->sticker && !convert->sticker->loc.dc && thumbLocation.dc) {
+				convert->sticker->loc = thumbLocation;
 			}
 
 			if (convert->location.check()) {
-				Local::writeFileLocation(mediaKey(mtpc_inputDocumentFileLocation, convert->dc, convert->id), convert->location);
+				Local::writeFileLocation(mediaKey(DocumentFileLocation, convert->dc, convert->id), convert->location);
 			}
 		}
 		DocumentsData::const_iterator i = documentsData.constFind(document);
@@ -1161,6 +1219,7 @@ namespace App {
 				result = convert;
 			} else {
 				result = new DocumentData(document, access, date, attributes, mime, thumb, dc, size);
+				if (result->sticker) result->sticker->loc = thumbLocation;
 			}
 			documentsData.insert(document, result);
 		} else {
@@ -1175,18 +1234,22 @@ namespace App {
 					result->dc = dc;
 					result->size = size;
 				} else {
-					if (result->thumb->isNull() && !thumb->isNull()) {
+					if (!thumb->isNull() && (result->thumb->isNull() || result->thumb->width() < thumb->width() || result->thumb->height() < thumb->height())) {
 						result->thumb = thumb;
 					}
-					if (result->alt.isEmpty()) {
+					if (result->sticker && !attributes.isEmpty() && (result->sticker->alt.isEmpty() || result->sticker->set.type() == mtpc_inputStickerSetEmpty)) {
 						for (QVector<MTPDocumentAttribute>::const_iterator i = attributes.cbegin(), e = attributes.cend(); i != e; ++i) {
 							if (i->type() == mtpc_documentAttributeSticker) {
 								const MTPDdocumentAttributeSticker &d(i->c_documentAttributeSticker());
 								if (d.valt.c_string().v.length() > 0) {
-									result->alt = qs(d.valt);
+									result->sticker->alt = qs(d.valt);
+									result->sticker->set = d.vstickerset;
 								}
 							}
 						}
+					}
+					if (result->sticker && !result->sticker->loc.dc && thumbLocation.dc) {
+						result->sticker->loc = thumbLocation;
 					}
 				}
 			}
@@ -1464,8 +1527,9 @@ namespace App {
 		if (api()) api()->clearWebPageRequests();
 		cSetRecentStickers(RecentStickerPack());
 		cSetStickersHash(QByteArray());
-		cSetStickers(AllStickers());
 		cSetEmojiStickers(EmojiStickersMap());
+		cSetStickerSets(StickerSets());
+		cSetLastStickersUpdate(0);
 		::videoItems.clear();
 		::audioItems.clear();
 		::documentItems.clear();
@@ -1516,6 +1580,34 @@ namespace App {
 		return 0;
 	}
 
+	void prepareCorners(RoundCorners index, int32 radius, const style::color &color, const style::color *shadow = 0, QImage *cors = 0) {
+		int32 r = radius * cIntRetinaFactor(), s = st::msgShadow * cIntRetinaFactor();
+		QImage rect(r * 3, r * 3 + (shadow ? s : 0), QImage::Format_ARGB32_Premultiplied), localCors[4];
+		{
+			QPainter p(&rect);
+			p.setCompositionMode(QPainter::CompositionMode_Source);
+			p.fillRect(QRect(0, 0, rect.width(), rect.height()), st::transparent->b);
+			p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+			p.setRenderHint(QPainter::HighQualityAntialiasing);
+			p.setPen(Qt::NoPen);
+			if (shadow) {
+				p.setBrush((*shadow)->b);
+				p.drawRoundedRect(0, s, r * 3, r * 3, r, r);
+			}
+			p.setBrush(color->b);
+			p.drawRoundedRect(0, 0, r * 3, r * 3, r, r);
+		}
+		if (!cors) cors = localCors;
+		cors[0] = rect.copy(0, 0, r, r);
+		cors[1] = rect.copy(r * 2, 0, r, r);
+		cors[2] = rect.copy(0, r * 2, r, r + (shadow ? s : 0));
+		cors[3] = rect.copy(r * 2, r * 2, r, r + (shadow ? s : 0));
+		for (int i = 0; i < 4; ++i) {
+			::corners[index][i] = new QPixmap(QPixmap::fromImage(cors[i], Qt::ColorOnly));
+			::corners[index][i]->setDevicePixelRatio(cRetinaFactor());
+		}
+	}
+
 	void initMedia() {
 		deinitMedia(false);
 		audioInit();
@@ -1537,6 +1629,32 @@ namespace App {
 			::emojisLarge = new QPixmap(QLatin1String(EmojiNames[EIndex + 1]));
 			if (cRetina()) ::emojisLarge->setDevicePixelRatio(cRetinaFactor());
 		}
+
+		QImage mask[4];
+		prepareCorners(MaskCorners, st::msgRadius, st::white, 0, mask);
+		for (int i = 0; i < 4; ++i) {
+			::cornersMask[i] = new QImage(mask[i].convertToFormat(QImage::Format_ARGB32_Premultiplied));
+			::cornersMask[i]->setDevicePixelRatio(cRetinaFactor());
+		}
+		prepareCorners(BlackCorners, st::msgRadius, st::black);
+		prepareCorners(ServiceCorners, st::msgRadius, st::msgServiceBg);
+		prepareCorners(ServiceSelectedCorners, st::msgRadius, st::msgServiceSelectBg);
+		prepareCorners(SelectedOverlayCorners, st::msgRadius, st::msgSelectOverlay);
+		prepareCorners(DateCorners, st::msgRadius, st::msgDateImgBg);
+		prepareCorners(DateSelectedCorners, st::msgRadius, st::msgDateImgSelectBg);
+		prepareCorners(InShadowCorners, st::msgRadius, st::msgInShadow);
+		prepareCorners(InSelectedShadowCorners, st::msgRadius, st::msgInSelectShadow);
+		prepareCorners(ForwardCorners, st::msgRadius, st::forwardBg);
+		prepareCorners(MediaviewSaveCorners, st::msgRadius, st::emojiPanHover);
+		prepareCorners(EmojiHoverCorners, st::msgRadius, st::emojiPanHover);
+		prepareCorners(StickerHoverCorners, st::msgRadius, st::emojiPanHover);
+
+		prepareCorners(MessageInCorners, st::msgRadius, st::msgInBg, &st::msgInShadow);
+		prepareCorners(MessageInSelectedCorners, st::msgRadius, st::msgInSelectBg, &st::msgInSelectShadow);
+		prepareCorners(MessageOutCorners, st::msgRadius, st::msgOutBg, &st::msgOutShadow);
+		prepareCorners(MessageOutSelectedCorners, st::msgRadius, st::msgOutSelectBg, &st::msgOutSelectShadow);
+		prepareCorners(ButtonHoverCorners, st::msgRadius, st::mediaSaveButton.overBgColor, &st::msgInShadow);
+
 	}
 	
 	void deinitMedia(bool completely) {
@@ -1554,6 +1672,12 @@ namespace App {
 			::emojis = 0;
 			delete ::emojisLarge;
 			::emojisLarge = 0;
+			for (int32 j = 0; j < 4; ++j) {
+				for (int32 i = 0; i < RoundCornersCount; ++i) {
+					delete ::corners[i][j]; ::corners[i][j] = 0;
+				}
+				delete ::cornersMask[j]; ::cornersMask[j] = 0;
+			}
 			mainEmojisMap.clear();
 			otherEmojisMap.clear();
 
@@ -1854,10 +1978,41 @@ namespace App {
 		}
 	}
 
+	void stickersBox(const QString &name) {
+		if (App::main()) {
+			App::main()->stickersBox(MTP_inputStickerSetShortName(MTP_string(name)));
+		}
+	}
+
 	void openLocalUrl(const QString &url) {
 		if (App::main()) {
 			App::main()->openLocalUrl(url);
 		}
+	}
+
+	QImage **cornersMask() {
+		return ::cornersMask;
+	}
+	QPixmap **corners(RoundCorners index) {
+		return ::corners[index];
+	}
+
+	void roundRect(QPainter &p, int32 x, int32 y, int32 w, int32 h, const style::color &bg, RoundCorners index, const style::color *sh) {
+		QPixmap **c = ::corners[index];
+		int32 cw = c[0]->width() / cIntRetinaFactor(), ch = c[0]->height() / cIntRetinaFactor();
+		if (w < 2 * cw || h < 2 * ch) return;
+		if (w > 2 * cw) {
+			p.fillRect(QRect(x + cw, y, w - 2 * cw, ch), bg->b);
+			p.fillRect(QRect(x + cw, y + h - ch, w - 2 * cw, ch), bg->b);
+			if (sh) p.fillRect(QRect(x + cw, y + h, w - 2 * cw, st::msgShadow), (*sh)->b);
+		}
+		if (h > 2 * ch) {
+			p.fillRect(QRect(x, y + ch, w, h - 2 * ch), bg->b);
+		}
+		p.drawPixmap(QPoint(x, y), *c[0]);
+		p.drawPixmap(QPoint(x + w - cw, y), *c[1]);
+		p.drawPixmap(QPoint(x, y + h - ch), *c[2]);
+		p.drawPixmap(QPoint(x + w - cw, y + h - ch), *c[3]);
 	}
 
 	void initBackground(int32 id, const QImage &p, bool nowrite) {
@@ -2002,7 +2157,17 @@ namespace App {
 		components[maxtomin[0]] = max;
 
 		uchar r = uchar(components[0]), g = uchar(components[1]), b = uchar(components[2]);
-		_msgServiceBG = style::color(r, g, b, qRound(st::msgServiceBG->c.alphaF() * 0xFF));
+		float64 alpha = st::msgServiceBg->c.alphaF();
+		_msgServiceBg = style::color(r, g, b, qRound(alpha * 0xFF));
+
+		float64 alphaSel = st::msgServiceSelectBg->c.alphaF(), addSel = (1. - ((1. - alphaSel) / (1. - alpha))) * 0xFF;
+		uchar rsel = snap(qRound(((1. - alphaSel) * r + addSel) / alphaSel), 0, 0xFF);
+		uchar gsel = snap(qRound(((1. - alphaSel) * g + addSel) / alphaSel), 0, 0xFF);
+		uchar bsel = snap(qRound(((1. - alphaSel) * b + addSel) / alphaSel), 0, 0xFF);
+		_msgServiceSelectBg = style::color(r, g, b, qRound(alphaSel * 0xFF));
+
+		prepareCorners(ServiceCorners, st::msgRadius, _msgServiceBg);
+		prepareCorners(ServiceSelectedCorners, st::msgRadius, _msgServiceSelectBg);
 
 		uchar rScroll = uchar(componentsScroll[0]), gScroll = uchar(componentsScroll[1]), bScroll = uchar(componentsScroll[2]);
 		_historyScrollBarColor = style::color(rScroll, gScroll, bScroll, qRound(st::historyScroll.barColor->c.alphaF() * 0xFF));
@@ -2015,27 +2180,31 @@ namespace App {
 		if (App::main()) App::main()->updateScrollColors();
 	}
 
-	style::color msgServiceBG() {
-		return _msgServiceBG;
+	const style::color &msgServiceBg() {
+		return _msgServiceBg;
 	}
 
-	style::color historyScrollBarColor() {
+	const style::color &msgServiceSelectBg() {
+		return _msgServiceSelectBg;
+	}
+
+	const style::color &historyScrollBarColor() {
 		return _historyScrollBarColor;
 	}
 
-	style::color historyScrollBgColor() {
+	const style::color &historyScrollBgColor() {
 		return _historyScrollBgColor;
 	}
 
-	style::color historyScrollBarOverColor() {
+	const style::color &historyScrollBarOverColor() {
 		return _historyScrollBarOverColor;
 	}
 
-	style::color historyScrollBgOverColor() {
+	const style::color &historyScrollBgOverColor() {
 		return _historyScrollBgOverColor;
 	}
 
-	style::color introPointHoverColor() {
+	const style::color &introPointHoverColor() {
 		return _introPointHoverColor;
 	}
 

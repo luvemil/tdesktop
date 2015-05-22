@@ -381,6 +381,9 @@ _connecting(0), _clearManager(0), dragging(false), _inactivePress(false), _shoul
 	connect(&_isActiveTimer, SIGNAL(timeout()), this, SLOT(updateIsActive()));
 
 	connect(&_autoLockTimer, SIGNAL(timeout()), this, SLOT(checkAutoLock()));
+
+	connect(this, SIGNAL(imageLoaded()), this, SLOT(update()));
+	connect(this, SIGNAL(imageLoaded()), this, SLOT(notifyUpdateAllPhotos()));
 }
 
 void Window::inactivePress(bool inactive) {
@@ -609,7 +612,7 @@ void Window::sendServiceHistoryRequest() {
 }
 
 void Window::setupMain(bool anim, const MTPUser *self) {
-	Local::readRecentStickers();
+	Local::readStickers();
 
 	QPixmap bg = anim ? myGrab(this, QRect(0, st::titleHeight, width(), height() - st::titleHeight)) : QPixmap();
 	clearWidgets();
@@ -807,9 +810,7 @@ void Window::hideLayer(bool fast) {
 			layerBG = 0;
 		}
 	}
-	if (_mediaView && !_mediaView->isHidden()) {
-		_mediaView->hide();
-	}
+	hideMediaview();
 }
 
 bool Window::hideInnerLayer() {
@@ -840,8 +841,12 @@ void Window::layerHidden() {
 		layerBG->deleteLater();
 	}
 	layerBG = 0;
-	if (_mediaView && !_mediaView->isHidden()) _mediaView->hide();
+	hideMediaview();
 	setInnerFocus();
+}
+
+void Window::hideMediaview() {
+	if (_mediaView && !_mediaView->isHidden()) _mediaView->hide();
 }
 
 void Window::setInnerFocus() {
@@ -1688,7 +1693,7 @@ QImage Window::iconWithCounter(int size, int count, style::color bg, bool smallI
 
 void Window::sendPaths() {
 	if (App::passcoded()) return;
-	if (_mediaView && !_mediaView->isHidden()) _mediaView->hide();
+	hideMediaview();
 	if (settings) {
 		hideSettings();
 	} else {
